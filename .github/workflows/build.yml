@@ -12,46 +12,56 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: deps
+      - name: build (diagnostico + compile)
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison flex libssl-dev make git zip python3 libncurses-dev device-tree-compiler ccache
+          set +e
+          {
+            echo "### 1. DEPS"
+            sudo apt-get update -qq && sudo apt-get install -y -qq bc bison flex libssl-dev make git zip python3 libncurses-dev device-tree-compiler ccache >/dev/null 2>&1
+            echo "### 2. CLONE KERNEL (lineage-20)"
+            git clone --depth=1 -b lineage-20 https://github.com/LineageOS/android_kernel_samsung_sm6115 kernel 2>&1 | tail -8
+            echo "kernel root:"; ls kernel 2>&1 | head
+            echo "### 3. DEFCONFIGS com gta4l:"
+            find kernel -iname '*gta4l*defconfig*' 2>/dev/null
+            echo "--- arch/arm64/configs ---"; ls kernel/arch/arm64/configs 2>/dev/null
+            echo "--- vendor configs ---"; ls kernel/arch/arm64/configs/vendor 2>/dev/null | grep -i gta4l
+            echo "### 4. TOOLCHAIN"
+            git clone --depth=1 https://github.com/kdrag0n/proton-clang clang 2>&1 | tail -3
+            echo "clang:"; clang/bin/clang --version 2>&1 | head -1
+            echo "### 5. ACHAR DEFCONFIG"
+            DEF=$(find kernel/arch/arm64/configs -iname '*gta4lwifi*defconfig*' | head -1)
+            [ -z "$DEF" ] && DEF=$(find kernel/arch/arm64/configs -iname '*gta4l*defconfig*' | head -1)
+            echo "DEF=$DEF"
+            if [ -n "$DEF" ]; then
+              cat "$GITHUB_WORKSPACE/halium-config.fragment" >> "$DEF"
+              export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+              ARGS="O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+              DEFNAME=$(basename "$DEF")
+              echo "### 6. make $DEFNAME"
+              ( cd kernel && make $ARGS "$DEFNAME" 2>&1 | tail -15 )
+              echo "### 7. BUILD Image.gz (pode demorar)"
+              ( cd kernel && make $ARGS -j$(nproc) Image.gz dtbs 2>&1 | tail -45 )
+            else
+              echo "### NENHUM defconfig gta4l achado!"
+            fi
+          } 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
-      - name: kernel source (LineageOS 19.1 / sm6115)
-        run: git clone --depth=1 -b lineage-19.1 https://github.com/LineageOS/android_kernel_samsung_sm6115 kernel
-
-      - name: toolchain (proton-clang)
-        run: git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
-
-      - name: apply halium config
-        run: |
-          cd kernel
-          DEF=$(find arch/arm64/configs -name 'gta4lwifi_defconfig' | head -1)
-          echo "DEFCONFIG=$DEF"
-          if [ -z "$DEF" ]; then echo "=== defconfig NAO achado, listando ==="; ls arch/arm64/configs; exit 1; fi
-          cat "$GITHUB_WORKSPACE/halium-config.fragment" >> "$DEF"
-          echo "=== ultimas linhas do defconfig ==="; tail -20 "$DEF"
-
-      - name: build
-        run: |
-          cd kernel
-          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          ARGS="O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
-          make $ARGS gta4lwifi_defconfig 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
-          make $ARGS -j$(nproc) Image.gz dtbs 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log" || true
-
-      - name: collect + push results to build-output
+      - name: collect + push
         if: always()
+        shell: bash
         run: |
           mkdir -p /tmp/out
-          tail -120 build.log > /tmp/out/build-tail.log 2>/dev/null || cp build.log /tmp/out/ 2>/dev/null || true
           cp build.log /tmp/out/build-full.log 2>/dev/null || true
-          if cp kernel/out/arch/arm64/boot/Image.gz /tmp/out/ 2>/dev/null; then echo "KERNEL OK" > /tmp/out/STATUS.txt; else echo "BUILD FALHOU - ver build-tail.log" > /tmp/out/STATUS.txt; fi
+          tail -160 build.log > /tmp/out/build-tail.log 2>/dev/null || true
+          if [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
+            cp kernel/out/arch/arm64/boot/Image.gz /tmp/out/
+            echo "KERNEL OK ($(du -h kernel/out/arch/arm64/boot/Image.gz | cut -f1))" > /tmp/out/STATUS.txt
+          else
+            echo "SEM Image.gz - ver build-tail.log" > /tmp/out/STATUS.txt
+          fi
           cd /tmp/out
-          git init -q
-          git config user.email ci@local
-          git config user.name ci
+          git init -q; git config user.email ci@local; git config user.name ci
           git checkout -b build-output
-          git add -A
-          git commit -q -m "build output [skip ci]"
+          git add -A; git commit -q -m "build output [skip ci]"
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" build-output
