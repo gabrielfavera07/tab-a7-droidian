@@ -20,24 +20,27 @@ jobs:
             echo "### DEPS"
             sudo apt-get update -qq && sudo apt-get install -y -qq bc bison flex libssl-dev make git zip python3 libncurses-dev device-tree-compiler ccache >/dev/null 2>&1
             echo "### CLONE KERNEL (lineage-20)"
-            git clone --depth=1 -b lineage-20 https://github.com/LineageOS/android_kernel_samsung_sm6115 kernel 2>&1 | tail -3
+            git clone --depth=1 -b lineage-20 https://github.com/LineageOS/android_kernel_samsung_sm6115 kernel 2>&1 | tail -1
             echo "### TOOLCHAIN"
             git clone --depth=1 https://github.com/kdrag0n/proton-clang clang 2>&1 | tail -1
             DEF=kernel/arch/arm64/configs/gta4l_eur_open_defconfig
-            echo "### DEFCONFIG: $DEF"
             cat "$GITHUB_WORKSPACE/halium-config.fragment" >> "$DEF"
             export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
             ARGS="O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
             cd kernel
-            make $ARGS gta4l_eur_open_defconfig > /tmp/kdef.log 2>&1
-            echo "### defconfig exit=$?"
-            echo "### BUILD (log completo em kbuild.log)"
-            make $ARGS -j$(nproc) Image.gz dtbs > /tmp/kbuild.log 2>&1
-            echo "### BUILD EXIT=$?"
-            echo "### ===== ERROS (error:/fatal) ====="
-            grep -niE 'error:|fatal error|Error [0-9]|undefined reference|No such file' /tmp/kbuild.log | grep -vi 'warning' | head -40
-            echo "### ===== ultimas 30 linhas ====="
-            tail -30 /tmp/kbuild.log
+            make $ARGS gta4l_eur_open_defconfig > /tmp/kdef.log 2>&1; echo "defconfig exit=$?"
+            echo "### BUILD Image.gz (o importante)"
+            make $ARGS -j$(nproc) Image.gz > /tmp/kbuild.log 2>&1
+            echo "### Image.gz EXIT=$?"
+            echo "### BUILD dtbs (best-effort, pode falhar em overlay alheio)"
+            make $ARGS -j$(nproc) dtbs >> /tmp/kbuild.log 2>&1
+            echo "### dtbs EXIT=$?"
+            echo "### ===== ERROS (se houver) ====="
+            grep -niE 'error:|fatal error|Error [0-9]|undefined reference' /tmp/kbuild.log | grep -vi 'warning' | head -25
+            echo "### ===== DTBs do nosso device (gta4) ====="
+            find out/arch/arm64/boot/dts -iname '*gta4*' 2>/dev/null
+            echo "### ===== Image.gz existe? ====="
+            ls -la out/arch/arm64/boot/Image.gz 2>&1
             cd ..
           } 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
@@ -46,11 +49,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p /tmp/out
-          tail -200 build.log > /tmp/out/build-tail.log 2>/dev/null || true
+          tail -120 build.log > /tmp/out/build-tail.log 2>/dev/null || true
           cp /tmp/kbuild.log /tmp/out/kbuild-full.log 2>/dev/null || true
           if [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
             cp kernel/out/arch/arm64/boot/Image.gz /tmp/out/
             echo "KERNEL OK ($(du -h kernel/out/arch/arm64/boot/Image.gz | cut -f1))" > /tmp/out/STATUS.txt
+            find kernel/out/arch/arm64/boot/dts -iname '*gta4*' -exec cp {} /tmp/out/ \; 2>/dev/null || true
           else
             echo "SEM Image.gz - ver build-tail.log" > /tmp/out/STATUS.txt
           fi
