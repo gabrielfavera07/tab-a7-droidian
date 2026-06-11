@@ -11,34 +11,35 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - name: build kernel-hack (modversions off + vermagic patch + namespaces)
+      - name: build kernel-hack (modversions off + vermagic patch + namespaces, sem -dirty)
         shell: bash
         run: |
           set +e
           {
             sudo apt-get update -qq && sudo apt-get install -y -qq bc bison flex libssl-dev make git zip python3 libncurses-dev device-tree-compiler ccache kmod >/dev/null 2>&1
             git clone -b lineage-23.2 https://github.com/LineageOS/android_kernel_samsung_sm6115 kernel 2>&1 | tail -2
-            ( cd kernel && git checkout 2e673e4df899 2>&1 | tail -1 && echo "commit: $(git rev-parse HEAD)" )
+            ( cd kernel && git checkout 2e673e4df899 2>&1 | tail -1 )
             git clone --depth=1 https://github.com/kdrag0n/proton-clang clang 2>&1 | tail -1
             export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
             ARGS="O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
             cd kernel
-            echo "### PATCH: forcar 'modversions' no vermagic (mesmo com MODVERSIONS off)"
+            git config user.email ci@local; git config user.name ci
             VH=$(find include -name vermagic.h | head -1); echo "vermagic.h: $VH"
             sed -i 's/#define MODULE_VERMAGIC_MODVERSIONS ""/#define MODULE_VERMAGIC_MODVERSIONS "modversions "/' "$VH"
-            grep -n 'MODULE_VERMAGIC_MODVERSIONS' "$VH"
+            echo "### git ignora a edicao (evita -dirty no vermagic)"
+            git update-index --assume-unchanged "$VH"
+            echo "dirty check (deve estar limpo):"; git status --porcelain | head
             mkdir -p out
-            echo "### config = stock + MODVERSIONS off + namespaces on"
             gunzip -c "$GITHUB_WORKSPACE/stock-config.gz" > out/.config
             ./scripts/config --file out/.config -d MODVERSIONS -e SYSVIPC -e PID_NS -e IPC_NS
             make $ARGS olddefconfig > /tmp/cfg.log 2>&1
-            echo "config final:"; grep -E 'CONFIG_MODVERSIONS|CONFIG_PID_NS=|CONFIG_IPC_NS=|CONFIG_SYSVIPC=' out/.config
+            echo "config:"; grep -E 'CONFIG_MODVERSIONS|CONFIG_PID_NS=|CONFIG_IPC_NS=|CONFIG_SYSVIPC=' out/.config
             echo "### build Image.gz"
             make $ARGS -j$(nproc) Image.gz > /tmp/k.log 2>&1
             echo "Image.gz exit=$?"; grep -iE 'error:' /tmp/k.log | grep -vi warning | head -8; tail -3 /tmp/k.log
-            echo "### kernel.release:"; cat out/include/config/kernel.release 2>/dev/null
-            echo "### VERMAGIC em vmlinux (DEVE conter 'modversions'):"
-            strings out/vmlinux 2>/dev/null | grep -m1 'cip131-st15-perf-g2e673e4df899 SMP'
+            echo "### kernel.release (DEVE ser ...g2e673e4df899 SEM -dirty):"; cat out/include/config/kernel.release 2>/dev/null
+            echo "### VERMAGIC em vmlinux (DEVE ter g2e673e4df899 ... modversions, SEM dirty):"
+            strings out/vmlinux 2>/dev/null | grep -m1 'g2e673e4df899'
             cd ..
           } 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
@@ -52,5 +53,5 @@ jobs:
           cd /tmp/out
           git init -q; git config user.email ci@local; git config user.name ci
           git checkout -b build-output
-          git add -A; git commit -q -m "kernel-hack [skip ci]"
+          git add -A; git commit -q -m "kernel-hack v2 [skip ci]"
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" build-output
