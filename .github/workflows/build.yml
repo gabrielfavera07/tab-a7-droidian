@@ -1,0 +1,57 @@
+name: build-halium-kernel
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libssl-dev make git zip python3 libncurses-dev device-tree-compiler ccache
+
+      - name: kernel source (LineageOS 19.1 / sm6115)
+        run: git clone --depth=1 -b lineage-19.1 https://github.com/LineageOS/android_kernel_samsung_sm6115 kernel
+
+      - name: toolchain (proton-clang)
+        run: git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+
+      - name: apply halium config
+        run: |
+          cd kernel
+          DEF=$(find arch/arm64/configs -name 'gta4lwifi_defconfig' | head -1)
+          echo "DEFCONFIG=$DEF"
+          if [ -z "$DEF" ]; then echo "=== defconfig NAO achado, listando ==="; ls arch/arm64/configs; exit 1; fi
+          cat "$GITHUB_WORKSPACE/halium-config.fragment" >> "$DEF"
+          echo "=== ultimas linhas do defconfig ==="; tail -20 "$DEF"
+
+      - name: build
+        run: |
+          cd kernel
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          ARGS="O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+          make $ARGS gta4lwifi_defconfig 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          make $ARGS -j$(nproc) Image.gz dtbs 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log" || true
+
+      - name: collect + push results to build-output
+        if: always()
+        run: |
+          mkdir -p /tmp/out
+          tail -120 build.log > /tmp/out/build-tail.log 2>/dev/null || cp build.log /tmp/out/ 2>/dev/null || true
+          cp build.log /tmp/out/build-full.log 2>/dev/null || true
+          if cp kernel/out/arch/arm64/boot/Image.gz /tmp/out/ 2>/dev/null; then echo "KERNEL OK" > /tmp/out/STATUS.txt; else echo "BUILD FALHOU - ver build-tail.log" > /tmp/out/STATUS.txt; fi
+          cd /tmp/out
+          git init -q
+          git config user.email ci@local
+          git config user.name ci
+          git checkout -b build-output
+          git add -A
+          git commit -q -m "build output [skip ci]"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" build-output
