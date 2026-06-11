@@ -1,4 +1,4 @@
-name: build-kernel-hack
+name: build-kernel-hack-cfi
 on:
   push:
     branches: [main]
@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - name: build kernel-hack (modversions off + vermagic patch + namespaces, sem -dirty)
+      - name: build kernel-hack + CFI stub
         shell: bash
         run: |
           set +e
@@ -24,22 +24,24 @@ jobs:
             ARGS="O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
             cd kernel
             git config user.email ci@local; git config user.name ci
-            VH=$(find include -name vermagic.h | head -1); echo "vermagic.h: $VH"
+            VH=$(find include -name vermagic.h | head -1)
             sed -i 's/#define MODULE_VERMAGIC_MODVERSIONS ""/#define MODULE_VERMAGIC_MODVERSIONS "modversions "/' "$VH"
-            echo "### git ignora a edicao (evita -dirty no vermagic)"
             git update-index --assume-unchanged "$VH"
-            echo "dirty check (deve estar limpo):"; git status --porcelain | head
+            echo "### STUB CFI: exporta __cfi_slowpath (modulos stock precisam)"
+            printf '\n#ifndef CONFIG_CFI_CLANG\nvoid __cfi_slowpath(u64 id, void *ptr) { }\nEXPORT_SYMBOL(__cfi_slowpath);\nvoid __cfi_slowpath_diag(u64 id, void *ptr, void *diag) { }\nEXPORT_SYMBOL(__cfi_slowpath_diag);\n#endif\n' >> kernel/module.c
+            git update-index --assume-unchanged kernel/module.c
+            tail -7 kernel/module.c
             mkdir -p out
             gunzip -c "$GITHUB_WORKSPACE/stock-config.gz" > out/.config
             ./scripts/config --file out/.config -d MODVERSIONS -e SYSVIPC -e PID_NS -e IPC_NS
             make $ARGS olddefconfig > /tmp/cfg.log 2>&1
-            echo "config:"; grep -E 'CONFIG_MODVERSIONS|CONFIG_PID_NS=|CONFIG_IPC_NS=|CONFIG_SYSVIPC=' out/.config
+            echo "config:"; grep -E 'CONFIG_MODVERSIONS|CONFIG_PID_NS=|CONFIG_IPC_NS=|CONFIG_CFI' out/.config
             echo "### build Image.gz"
             make $ARGS -j$(nproc) Image.gz > /tmp/k.log 2>&1
             echo "Image.gz exit=$?"; grep -iE 'error:' /tmp/k.log | grep -vi warning | head -8; tail -3 /tmp/k.log
-            echo "### kernel.release (DEVE ser ...g2e673e4df899 SEM -dirty):"; cat out/include/config/kernel.release 2>/dev/null
-            echo "### VERMAGIC em vmlinux (DEVE ter g2e673e4df899 ... modversions, SEM dirty):"
-            strings out/vmlinux 2>/dev/null | grep -m1 'g2e673e4df899'
+            echo "### kernel.release:"; cat out/include/config/kernel.release 2>/dev/null
+            echo "### __cfi_slowpath exportado? (deve aparecer)"; grep -w __cfi_slowpath out/Module.symvers 2>/dev/null || echo "(Module.symvers nao tem - mas MODVERSIONS off, ok se compilou)"
+            grep -w __cfi_slowpath out/System.map 2>/dev/null && echo "no System.map -> exportado OK"
             cd ..
           } 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
@@ -53,5 +55,5 @@ jobs:
           cd /tmp/out
           git init -q; git config user.email ci@local; git config user.name ci
           git checkout -b build-output
-          git add -A; git commit -q -m "kernel-hack v2 [skip ci]"
+          git add -A; git commit -q -m "kernel-hack cfi [skip ci]"
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" build-output
