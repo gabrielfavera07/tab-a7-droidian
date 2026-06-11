@@ -1,4 +1,4 @@
-name: build-halium-kernel
+name: build-droidspaces-kernel
 on:
   push:
     branches: [main]
@@ -12,35 +12,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: build
+      - name: build kernel + modulos
         shell: bash
         run: |
           set +e
           {
             echo "### DEPS"
-            sudo apt-get update -qq && sudo apt-get install -y -qq bc bison flex libssl-dev make git zip python3 libncurses-dev device-tree-compiler ccache >/dev/null 2>&1
-            echo "### CLONE KERNEL (lineage-20)"
-            git clone --depth=1 -b lineage-20 https://github.com/LineageOS/android_kernel_samsung_sm6115 kernel 2>&1 | tail -1
-            echo "### TOOLCHAIN"
+            sudo apt-get update -qq && sudo apt-get install -y -qq bc bison flex libssl-dev make git zip python3 libncurses-dev device-tree-compiler ccache kmod >/dev/null 2>&1
+            echo "### CLONE lineage-23.2 (casa com o device)"
+            git clone --depth=1 -b lineage-23.2 https://github.com/LineageOS/android_kernel_samsung_sm6115 kernel 2>&1 | tail -1
+            echo "### TOOLCHAIN proton-clang"
             git clone --depth=1 https://github.com/kdrag0n/proton-clang clang 2>&1 | tail -1
-            DEF=kernel/arch/arm64/configs/gta4l_eur_open_defconfig
-            cat "$GITHUB_WORKSPACE/halium-config.fragment" >> "$DEF"
             export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
             ARGS="O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
             cd kernel
-            make $ARGS gta4l_eur_open_defconfig > /tmp/kdef.log 2>&1; echo "defconfig exit=$?"
-            echo "### BUILD Image.gz (o importante)"
-            make $ARGS -j$(nproc) Image.gz > /tmp/kbuild.log 2>&1
-            echo "### Image.gz EXIT=$?"
-            echo "### BUILD dtbs (best-effort, pode falhar em overlay alheio)"
-            make $ARGS -j$(nproc) dtbs >> /tmp/kbuild.log 2>&1
-            echo "### dtbs EXIT=$?"
-            echo "### ===== ERROS (se houver) ====="
-            grep -niE 'error:|fatal error|Error [0-9]|undefined reference' /tmp/kbuild.log | grep -vi 'warning' | head -25
-            echo "### ===== DTBs do nosso device (gta4) ====="
-            find out/arch/arm64/boot/dts -iname '*gta4*' 2>/dev/null
-            echo "### ===== Image.gz existe? ====="
-            ls -la out/arch/arm64/boot/Image.gz 2>&1
+            mkdir -p out
+            echo "### CONFIG = stock do device + ligar namespaces"
+            gunzip -c "$GITHUB_WORKSPACE/stock-config.gz" > out/.config
+            # ligar o que falta pro Droidspaces (append vence no olddefconfig)
+            printf '\nCONFIG_SYSVIPC=y\nCONFIG_PID_NS=y\nCONFIG_IPC_NS=y\n' >> out/.config
+            make $ARGS olddefconfig > /tmp/cfg.log 2>&1
+            echo "olddefconfig exit=$?"
+            echo "### confere namespaces no .config final:"
+            grep -E 'CONFIG_SYSVIPC=|CONFIG_PID_NS=|CONFIG_IPC_NS=|CONFIG_NAMESPACES=' out/.config
+            echo "### BUILD Image.gz"
+            make $ARGS -j$(nproc) Image.gz > /tmp/kimg.log 2>&1
+            echo "Image.gz exit=$?  (tail:)"; tail -8 /tmp/kimg.log
+            echo "### BUILD modules"
+            make $ARGS -j$(nproc) modules > /tmp/kmod.log 2>&1
+            echo "modules exit=$?  (erros:)"; grep -iE 'error:|Error [0-9]' /tmp/kmod.log | grep -vi warning | head -15
+            echo "### INSTALL modules"
+            make $ARGS INSTALL_MOD_PATH=/tmp/modout modules_install > /tmp/kmi.log 2>&1
+            echo "### .ko gerados:"; find /tmp/modout -name '*.ko' 2>/dev/null | wc -l
+            echo "### wlan + audio gerados?"; find /tmp/modout -name '*.ko' 2>/dev/null | grep -iE 'wlan|qca|dlkm|audio' | head -10
+            echo "### vermagic do nosso build:"; M=$(find /tmp/modout -name '*.ko' 2>/dev/null | head -1); [ -n "$M" ] && strings "$M" | grep -m1 vermagic
             cd ..
           } 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
@@ -50,16 +55,15 @@ jobs:
         run: |
           mkdir -p /tmp/out
           tail -120 build.log > /tmp/out/build-tail.log 2>/dev/null || true
-          cp /tmp/kbuild.log /tmp/out/kbuild-full.log 2>/dev/null || true
           if [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
             cp kernel/out/arch/arm64/boot/Image.gz /tmp/out/
-            echo "KERNEL OK ($(du -h kernel/out/arch/arm64/boot/Image.gz | cut -f1))" > /tmp/out/STATUS.txt
-            find kernel/out/arch/arm64/boot/dts -iname '*gta4*' -exec cp {} /tmp/out/ \; 2>/dev/null || true
+            ( cd /tmp/modout 2>/dev/null && tar czf /tmp/out/modules.tar.gz lib 2>/dev/null ) || true
+            echo "KERNEL OK + $(find /tmp/modout -name '*.ko' 2>/dev/null | wc -l) modulos" > /tmp/out/STATUS.txt
           else
             echo "SEM Image.gz - ver build-tail.log" > /tmp/out/STATUS.txt
           fi
           cd /tmp/out
           git init -q; git config user.email ci@local; git config user.name ci
           git checkout -b build-output
-          git add -A; git commit -q -m "build output [skip ci]"
+          git add -A; git commit -q -m "droidspaces kernel [skip ci]"
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" build-output
