@@ -1,4 +1,4 @@
-name: build-vermagic-match
+name: build-diagnostico-stock-puro
 on:
   push:
     branches: [main]
@@ -11,30 +11,30 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - name: build + comparar CRC
+      - name: build STOCK PURO + comparar CRC
         shell: bash
         run: |
           set +e
           {
             sudo apt-get update -qq && sudo apt-get install -y -qq bc bison flex libssl-dev make git zip python3 libncurses-dev device-tree-compiler ccache kmod >/dev/null 2>&1
-            echo "### clone COMPLETO lineage-23.2 + checkout commit EXATO do stock (2e673e4df899)"
+            echo "### DIAGNOSTICO: config stock PURA (SEM namespaces) no commit exato 2e673e4df899"
             git clone -b lineage-23.2 https://github.com/LineageOS/android_kernel_samsung_sm6115 kernel 2>&1 | tail -2
             ( cd kernel && git checkout 2e673e4df899 2>&1 | tail -2 && echo "COMMIT ATUAL: $(git rev-parse HEAD)" )
             git clone --depth=1 https://github.com/kdrag0n/proton-clang clang 2>&1 | tail -1
             export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
             ARGS="O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
             cd kernel; mkdir -p out
-            echo "### config = STOCK do device + so ligar namespaces"
+            echo "### config = STOCK PURA (NENHUMA mudanca - so olddefconfig)"
             gunzip -c "$GITHUB_WORKSPACE/stock-config.gz" > out/.config
-            printf '\nCONFIG_SYSVIPC=y\nCONFIG_PID_NS=y\nCONFIG_IPC_NS=y\n' >> out/.config
             make $ARGS olddefconfig > /tmp/cfg.log 2>&1
-            grep -E 'CONFIG_SYSVIPC=|CONFIG_PID_NS=|CONFIG_IPC_NS=' out/.config
+            echo "PID_NS no config (deve seguir OFF):"; grep -E 'CONFIG_PID_NS|CONFIG_SYSVIPC' out/.config | head
             echo "### build Image.gz"
             make $ARGS -j$(nproc) Image.gz > /tmp/k.log 2>&1
             echo "Image.gz exit=$?"; grep -iE 'error:' /tmp/k.log | grep -vi warning | head -8; tail -3 /tmp/k.log
-            echo "### KERNEL.RELEASE (DEVE ser 4.19.325-cip131-st15-perf-g2e673e4df899):"; cat out/include/config/kernel.release 2>/dev/null
+            echo "### KERNEL.RELEASE:"; cat out/include/config/kernel.release 2>/dev/null
             cd ..
-            echo "### ====== COMPARACAO DE CRC (so simbolos do kernel) ======"
+            echo "### ====== COMPARACAO DE CRC (stock PURO vs nosso kernel) ======"
+            echo "### Se BATER -> namespaces eram o problema. Se DIVERGIR -> e o clang/LTO interno do Google."
             python3 "$GITHUB_WORKSPACE/compare-crc.py"
           } 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
@@ -43,11 +43,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p /tmp/out
-          tail -130 build.log > /tmp/out/RESULTADO.log
+          tail -90 build.log > /tmp/out/RESULTADO.log
           cat kernel/out/include/config/kernel.release > /tmp/out/our-vermagic.txt 2>/dev/null || true
-          if [ -f kernel/out/arch/arm64/boot/Image.gz ]; then cp kernel/out/arch/arm64/boot/Image.gz /tmp/out/; echo "KERNEL OK" > /tmp/out/STATUS.txt; else echo "SEM Image.gz" > /tmp/out/STATUS.txt; fi
+          echo "diagnostico stock puro" > /tmp/out/STATUS.txt
           cd /tmp/out
           git init -q; git config user.email ci@local; git config user.name ci
           git checkout -b build-output
-          git add -A; git commit -q -m "vermagic-match v2 [skip ci]"
+          git add -A; git commit -q -m "diagnostico stock puro [skip ci]"
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" build-output
