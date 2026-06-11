@@ -12,39 +12,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: build (diagnostico + compile)
+      - name: build
         shell: bash
         run: |
           set +e
           {
-            echo "### 1. DEPS"
+            echo "### DEPS"
             sudo apt-get update -qq && sudo apt-get install -y -qq bc bison flex libssl-dev make git zip python3 libncurses-dev device-tree-compiler ccache >/dev/null 2>&1
-            echo "### 2. CLONE KERNEL (lineage-20)"
-            git clone --depth=1 -b lineage-20 https://github.com/LineageOS/android_kernel_samsung_sm6115 kernel 2>&1 | tail -8
-            echo "kernel root:"; ls kernel 2>&1 | head
-            echo "### 3. DEFCONFIGS com gta4l:"
-            find kernel -iname '*gta4l*defconfig*' 2>/dev/null
-            echo "--- arch/arm64/configs ---"; ls kernel/arch/arm64/configs 2>/dev/null
-            echo "--- vendor configs ---"; ls kernel/arch/arm64/configs/vendor 2>/dev/null | grep -i gta4l
-            echo "### 4. TOOLCHAIN"
-            git clone --depth=1 https://github.com/kdrag0n/proton-clang clang 2>&1 | tail -3
-            echo "clang:"; clang/bin/clang --version 2>&1 | head -1
-            echo "### 5. ACHAR DEFCONFIG"
-            DEF=$(find kernel/arch/arm64/configs -iname '*gta4lwifi*defconfig*' | head -1)
-            [ -z "$DEF" ] && DEF=$(find kernel/arch/arm64/configs -iname '*gta4l*defconfig*' | head -1)
-            echo "DEF=$DEF"
-            if [ -n "$DEF" ]; then
-              cat "$GITHUB_WORKSPACE/halium-config.fragment" >> "$DEF"
-              export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-              ARGS="O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
-              DEFNAME=$(basename "$DEF")
-              echo "### 6. make $DEFNAME"
-              ( cd kernel && make $ARGS "$DEFNAME" 2>&1 | tail -15 )
-              echo "### 7. BUILD Image.gz (pode demorar)"
-              ( cd kernel && make $ARGS -j$(nproc) Image.gz dtbs 2>&1 | tail -45 )
-            else
-              echo "### NENHUM defconfig gta4l achado!"
-            fi
+            echo "### CLONE KERNEL (lineage-20)"
+            git clone --depth=1 -b lineage-20 https://github.com/LineageOS/android_kernel_samsung_sm6115 kernel 2>&1 | tail -3
+            echo "### TOOLCHAIN"
+            git clone --depth=1 https://github.com/kdrag0n/proton-clang clang 2>&1 | tail -1
+            DEF=kernel/arch/arm64/configs/gta4l_eur_open_defconfig
+            echo "### DEFCONFIG: $DEF"
+            cat "$GITHUB_WORKSPACE/halium-config.fragment" >> "$DEF"
+            export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+            ARGS="O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+            cd kernel
+            make $ARGS gta4l_eur_open_defconfig > /tmp/kdef.log 2>&1
+            echo "### defconfig exit=$?"
+            echo "### BUILD (log completo em kbuild.log)"
+            make $ARGS -j$(nproc) Image.gz dtbs > /tmp/kbuild.log 2>&1
+            echo "### BUILD EXIT=$?"
+            echo "### ===== ERROS (error:/fatal) ====="
+            grep -niE 'error:|fatal error|Error [0-9]|undefined reference|No such file' /tmp/kbuild.log | grep -vi 'warning' | head -40
+            echo "### ===== ultimas 30 linhas ====="
+            tail -30 /tmp/kbuild.log
+            cd ..
           } 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
       - name: collect + push
@@ -52,8 +46,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p /tmp/out
-          cp build.log /tmp/out/build-full.log 2>/dev/null || true
-          tail -160 build.log > /tmp/out/build-tail.log 2>/dev/null || true
+          tail -200 build.log > /tmp/out/build-tail.log 2>/dev/null || true
+          cp /tmp/kbuild.log /tmp/out/kbuild-full.log 2>/dev/null || true
           if [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
             cp kernel/out/arch/arm64/boot/Image.gz /tmp/out/
             echo "KERNEL OK ($(du -h kernel/out/arch/arm64/boot/Image.gz | cut -f1))" > /tmp/out/STATUS.txt
