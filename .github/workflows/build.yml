@@ -31,19 +31,28 @@ jobs:
             printf '\n#ifndef CONFIG_CFI_CLANG\nvoid __cfi_slowpath(u64 id, void *ptr) { }\nEXPORT_SYMBOL(__cfi_slowpath);\nvoid __cfi_slowpath_diag(u64 id, void *ptr, void *diag) { }\nEXPORT_SYMBOL(__cfi_slowpath_diag);\n#endif\n' >> kernel/module.c
             git update-index --assume-unchanged kernel/module.c
             tail -7 kernel/module.c
-            echo "### FIX PREL32: stock compila struct kernel_symbol de 16 bytes (PREL32 OFF)."
-            echo "### Nosso build pegava PREL32=y (8 bytes) -> lia __ksymtab dos modulos desalinhado -> nomes VAZIOS."
-            echo "### Forca def_bool n pra bater com o stride do stock:"
-            PK=$(grep -rl "config HAVE_ARCH_PREL32_RELOCATIONS" --include=Kconfig . | head -1)
-            echo "Kconfig encontrado: $PK"
-            sed -i '/config HAVE_ARCH_PREL32_RELOCATIONS/,/^config /{s/def_bool y/def_bool n/}' "$PK"
+            echo "### FIX PREL32 (robusto): struct kernel_symbol stock=16B (PREL32 off). Forca OFF."
+            PK=$(grep -rln "^config HAVE_ARCH_PREL32_RELOCATIONS" --include=Kconfig . | head -1)
+            echo "## arquivo da definicao: $PK"
+            echo "## stanza ANTES:"
+            awk '/^config HAVE_ARCH_PREL32_RELOCATIONS/{p=1;print;next} p&&/^config /{exit} p{print}' "$PK"
+            echo "## quem SELECT-a:"; grep -rln "select HAVE_ARCH_PREL32_RELOCATIONS" --include=Kconfig . || echo "(ninguem)"
+            # patch 1: depends on BROKEN logo apos a definicao (BROKEN nunca setado -> simbolo OFF, independe de def_bool/default)
+            sed -i '/^config HAVE_ARCH_PREL32_RELOCATIONS/a\	depends on BROKEN' "$PK"
             git update-index --assume-unchanged "$PK"
-            grep -A3 "config HAVE_ARCH_PREL32_RELOCATIONS" "$PK"
+            # patch 2: remove qualquer 'select' dele (select ignora depends)
+            for f in $(grep -rln "select HAVE_ARCH_PREL32_RELOCATIONS" --include=Kconfig .); do
+              sed -i '/select HAVE_ARCH_PREL32_RELOCATIONS/d' "$f"; git update-index --assume-unchanged "$f"
+            done
+            echo "## stanza DEPOIS:"
+            awk '/^config HAVE_ARCH_PREL32_RELOCATIONS/{p=1;print;next} p&&/^config /{exit} p{print}' "$PK"
             mkdir -p out
             gunzip -c "$GITHUB_WORKSPACE/stock-config.gz" > out/.config
             ./scripts/config --file out/.config -d MODVERSIONS -e SYSVIPC -e PID_NS -e IPC_NS
             make $ARGS olddefconfig > /tmp/cfg.log 2>&1
             echo "config (PREL32 DEVE estar 'is not set'):"; grep -E 'CONFIG_MODVERSIONS|CONFIG_PID_NS=|CONFIG_IPC_NS=|CONFIG_CFI|PREL32' out/.config
+            if grep -q '^CONFIG_HAVE_ARCH_PREL32_RELOCATIONS=y' out/.config; then echo "### ERRO FATAL: PREL32 ainda LIGADO apos patch -> nao adianta buildar, abortando"; exit 1; fi
+            echo "### OK: PREL32 DESLIGADO (struct 16 bytes) -> segue build"
             echo "### build Image.gz"
             make $ARGS -j$(nproc) Image.gz > /tmp/k.log 2>&1
             echo "Image.gz exit=$?"; grep -iE 'error:' /tmp/k.log | grep -vi warning | head -8; tail -3 /tmp/k.log
