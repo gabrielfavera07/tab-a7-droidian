@@ -1,0 +1,40 @@
+	  May be selected by an architecture if it supports place-relative
+	  32-bit relocations, both in the toolchain and in the module loader,
+	  in which case relative references can be used in special sections
+	  for PCI fixup, initcalls etc which are only half the size on 64 bit
+	  architectures, and don't require runtime relocation on relocatable
+	  kernels.
+
+### FIX task_struct: SYSVIPC insere sysvsem/sysvshm no MEIO -> desloca cred/comm/nsproxy que os modulos stock acessam.
+### Move pro FIM (antes de thread) -> offsets batem com o stock, mantendo SYSVIPC pro IPC_NS:
+OK: bloco SYSVIPC movido para antes de thread_struct
+--- bloco movido ---
+#ifdef CONFIG_SYSVIPC
+	struct sysv_sem			sysvsem;
+	struct sysv_shm			sysvshm;
+#endif
+### FIX struct module: CFI adiciona cfi_check ANTES de init -> kernel CFI-off le mod->init no offset errado -> init vira no-op -> drivers nao registram.
+### Mantem cfi_check no struct (padding) pra casar com os modulos CFI:
+OK: cfi_check agora sempre presente no struct module (ABI match com modulos CFI)
+--- trecho aplicado ---
+#ifdef CONFIG_CFI_CLANG
+	cfi_check_fn cfi_check;
+#else
+	void *cfi_check;	/* ABI padding: casa com modulos compilados com CFI */
+#endif
+config (PREL32 DEVE estar 'is not set'):
+CONFIG_IPC_NS=y
+CONFIG_PID_NS=y
+# CONFIG_MODVERSIONS is not set
+### OK: PREL32 DESLIGADO (struct 16 bytes) -> segue build
+### build Image.gz
+Image.gz exit=0
+find: ‘arch/arm64/boot/dts/’: No such file or directory
+  GZIP    arch/arm64/boot/Image.gz
+make[1]: Leaving directory '/home/runner/work/tab-a7-droidian/tab-a7-droidian/kernel/out'
+### kernel.release:
+4.19.325-cip131-st15-perf-g2e673e4df899
+### __cfi_slowpath exportado? (deve aparecer)
+0x00000000	__cfi_slowpath	vmlinux	EXPORT_SYMBOL
+ffffff801019e6d8 T __cfi_slowpath
+no System.map -> exportado OK
