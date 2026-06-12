@@ -46,6 +46,10 @@ jobs:
             done
             echo "## stanza DEPOIS:"
             awk '/^config HAVE_ARCH_PREL32_RELOCATIONS/{p=1;print;next} p&&/^config /{exit} p{print}' "$PK"
+            echo "### FIX task_struct: SYSVIPC insere sysvsem/sysvshm no MEIO -> desloca cred/comm/nsproxy que os modulos stock acessam."
+            echo "### Move pro FIM (antes de thread) -> offsets batem com o stock, mantendo SYSVIPC pro IPC_NS:"
+            python3 "$GITHUB_WORKSPACE/fix_taskstruct.py" || { echo "### ERRO FATAL: patch task_struct falhou"; exit 1; }
+            git update-index --assume-unchanged include/linux/sched.h
             mkdir -p out
             gunzip -c "$GITHUB_WORKSPACE/stock-config.gz" > out/.config
             ./scripts/config --file out/.config -d MODVERSIONS -e SYSVIPC -e PID_NS -e IPC_NS
