@@ -56,7 +56,7 @@ jobs:
             git update-index --assume-unchanged include/linux/module.h
             mkdir -p out
             gunzip -c "$GITHUB_WORKSPACE/stock-config.gz" > out/.config
-            ./scripts/config --file out/.config -d MODVERSIONS -e SYSVIPC -e PID_NS -e IPC_NS
+            ./scripts/config --file out/.config -d MODVERSIONS -e SYSVIPC -e PID_NS -e IPC_NS -e DEVTMPFS -d DEVTMPFS_MOUNT
             make $ARGS olddefconfig > /tmp/cfg.log 2>&1
             echo "config (PREL32 DEVE estar 'is not set'):"; grep -E 'CONFIG_MODVERSIONS|CONFIG_PID_NS=|CONFIG_IPC_NS=|CONFIG_CFI|PREL32' out/.config
             if grep -q '^CONFIG_HAVE_ARCH_PREL32_RELOCATIONS=y' out/.config; then echo "### ERRO FATAL: PREL32 ainda LIGADO apos patch -> nao adianta buildar, abortando"; exit 1; fi
