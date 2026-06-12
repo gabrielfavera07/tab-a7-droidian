@@ -50,6 +50,10 @@ jobs:
             echo "### Move pro FIM (antes de thread) -> offsets batem com o stock, mantendo SYSVIPC pro IPC_NS:"
             python3 "$GITHUB_WORKSPACE/fix_taskstruct.py" || { echo "### ERRO FATAL: patch task_struct falhou"; exit 1; }
             git update-index --assume-unchanged include/linux/sched.h
+            echo "### FIX struct module: CFI adiciona cfi_check ANTES de init -> kernel CFI-off le mod->init no offset errado -> init vira no-op -> drivers nao registram."
+            echo "### Mantem cfi_check no struct (padding) pra casar com os modulos CFI:"
+            python3 "$GITHUB_WORKSPACE/fix_module_struct.py" || { echo "### ERRO FATAL: patch struct module falhou"; exit 1; }
+            git update-index --assume-unchanged include/linux/module.h
             mkdir -p out
             gunzip -c "$GITHUB_WORKSPACE/stock-config.gz" > out/.config
             ./scripts/config --file out/.config -d MODVERSIONS -e SYSVIPC -e PID_NS -e IPC_NS
